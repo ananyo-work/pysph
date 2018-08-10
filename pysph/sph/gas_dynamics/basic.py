@@ -276,7 +276,8 @@ class ADKEAccelerations(Equation):
         2014, Journal of Computational Physics, 256, pp 308 -- 333
             (http://dx.doi.org/10.1016/j.jcp.2013.08.060)
     """
-    def __init__(self, dest, sources, alpha, beta, g1, g2, k, eps):
+    def __init__(self, dest, sources, alpha, beta,
+                g1, g2, k, eps, thrm_eps=0.1):
         self.alpha = alpha
         self.g1 = g1
         self.g2 = g1
@@ -284,6 +285,7 @@ class ADKEAccelerations(Equation):
         self.beta = beta
         self.k = k
         self.eps = eps
+        self.thrm_eps = thrm_eps
         super(ADKEAccelerations, self).__init__(dest, sources)
 
     def initialize(self, d_idx, d_au, d_av, d_aw, d_ae):
@@ -329,14 +331,15 @@ class ADKEAccelerations(Equation):
         ej = s_e[s_idx]
 
         # Themal Conduction
+        THEPS = self.thrm_eps * self.thrm_eps * HIJ * HIJ
         Hi = self.g1 * hi * ci + self.g2 * hi * hi*(abs(divi)-divi)
         Hj = self.g1 * hj * cj + self.g2 * hj * hj*(abs(divj)-divj)
-        Hij = (Hi+Hj)*(ei-ej)/(RHOIJ*(R2IJ+EPS))
+        Hij = (Hi+Hj)*(ei-ej)/(RHOIJ*(R2IJ+THEPS))
 
         xijdotvij = XIJ[0]*VIJ[0] + XIJ[1]*VIJ[1] + XIJ[2]*VIJ[2]
         piij = 0.0
         if xijdotvij < 0:
-            muij = HIJ*xijdotvij/(R2IJ+EPS)
+            muij = HIJ*xijdotvij/(R2IJ+THEPS)
             piij = muij * (self.beta*muij - self.alpha*cij)*RHOIJ1
         tmpv = pibrhoi2 + pjbrhoj2 + piij
         d_au[d_idx] += -mj*tmpv * DWIJ[0]

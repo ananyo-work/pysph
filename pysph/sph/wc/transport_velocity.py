@@ -715,3 +715,158 @@ class SolidWallPressureBC(Equation):
 
         # update the density from the pressure Eq. (28)
         d_rho[d_idx] = self.rho0 * (d_p[d_idx]/self.p0 + self.b)
+
+
+class SolidWallPressureBCWithoutDensity(Equation):
+    r"""**Solid wall pressure boundary condition** [Adami2012]_
+
+    This boundary condition is to be used with fixed ghost particles
+    in SPH simulations and is formulated for the general case of
+    moving boundaries.
+
+    The velocity and pressure of the fluid particles is extrapolated
+    to the ghost particles and these values are used in the equations
+    of motion.
+
+    Pressure boundary condition:
+
+    The pressure of the ghost particle is also calculated from the
+    fluid particle by interpolation using:
+
+    .. math::
+
+        p_g = \frac{\sum_f p_f W_{gf} + \boldsymbol{g - a_g} \cdot
+        \sum_f \rho_f \boldsymbol{r}_{gf}W_{gf}}{\sum_f W_{gf}},
+
+    where the subscripts `g` and `f` relate to the ghost and fluid
+    particles respectively.
+
+    Density of the wall particle is then set using this pressure
+
+    .. math::
+
+        \rho_w=\rho_0\left(\frac{p_w - \mathcal{X}}{p_0} +
+        1\right)^{\frac{1}{\gamma}}
+    """
+
+    def __init__(self, dest, sources, rho0, p0, b=1.0, gx=0.0, gy=0.0, gz=0.0):
+        r"""
+        Parameters
+        ----------
+        rho0 : float
+            reference density
+        p0 : float
+            reference pressure
+        b : float
+            constant (default 1.0)
+        gx : float
+            Body force per unit mass along the x-axis
+        gy : float
+            Body force per unit mass along the y-axis
+        gz : float
+            Body force per unit mass along the z-axis
+
+        Notes
+        -----
+        For a two fluid system (boundary, fluid), this equation must be
+        instantiated with boundary as the destination and fluid as the
+        source.
+
+        The boundary particle array must additionally define a property
+        :math:`wij` for the denominator in Eq. (27) from [Adami2012]. This
+        array sums the kernel terms from the ghost particle to the fluid
+        particle.
+        """
+
+        self.rho0 = rho0
+        self.p0 = p0
+        self.b = b
+        self.gx = gx
+        self.gy = gy
+        self.gz = gz
+
+        super(SolidWallPressureBCWithoutDensity, self).__init__(dest, sources)
+
+    def initialize(self, d_idx, d_p, d_wij):
+        d_p[d_idx] = 0.0
+        d_wij[d_idx] = 0.0
+
+    def loop(self, d_idx, s_idx, d_p, s_p, d_wij, s_rho,
+             d_au, d_av, d_aw, WIJ, XIJ):
+
+        # numerator of Eq. (27) ax, ay and az are the prescribed wall
+        # accelerations which must be defined for the wall boundary
+        # particle
+        gdotxij = (self.gx - d_au[d_idx])*XIJ[0] + \
+            (self.gy - d_av[d_idx])*XIJ[1] + \
+            (self.gz - d_aw[d_idx])*XIJ[2]
+
+        d_p[d_idx] += s_p[s_idx]*WIJ + s_rho[s_idx]*gdotxij*WIJ
+
+        # denominator of Eq. (27)
+        d_wij[d_idx] += WIJ
+
+    def post_loop(self, d_idx, d_wij, d_p, d_rho):
+        # extrapolated pressure at the ghost particle
+        if d_wij[d_idx] > 1e-14:
+            d_p[d_idx] /= d_wij[d_idx]
+
+        # update the density from the pressure Eq. (28)
+        if d_p[d_idx]/self.p0 <= 1e-14:
+            b = self.b
+        else:
+            b = 0.0
+
+
+class SetWallVelocityReflect(Equation):
+    r"""**Extrapolating the fluid velocity on to the wall**
+
+    Eq. (22) in [Adami2012]:
+
+    .. math::
+
+        \tilde{\boldsymbol{v}}_a = \frac{\sum_b\boldsymbol{v}_b W_{ab}}
+        {\sum_b W_{ab}}
+
+    Notes
+    -----
+    The destination particle array for this equation should define the
+    *filtered* velocity variables :math:`uf, vf, wf`.
+
+    """
+    def initialize(self, d_idx, d_uf, d_vf, d_wf, d_wij):
+        d_uf[d_idx] = 0.0
+        d_vf[d_idx] = 0.0
+        d_wf[d_idx] = 0.0
+        d_wij[d_idx] = 0.0
+
+    def loop(self, d_idx, s_idx, d_uf, d_vf, d_wf,
+             s_u, s_v, s_w, d_wij, WIJ):
+
+        # normalisation factor is different from 'V' as the particles
+        # near the boundary do not have full kernel support
+        d_wij[d_idx] += WIJ
+
+        # sum in Eq. (22)
+        # this will be normalized in post loop
+        d_uf[d_idx] += s_u[s_idx] * WIJ
+        d_vf[d_idx] += s_v[s_idx] * WIJ
+        d_wf[d_idx] += s_w[s_idx] * WIJ
+
+    def post_loop(self, d_uf, d_vf, d_wf, d_wij, d_idx,
+                  d_ug, d_vg, d_wg, d_u, d_v, d_w):
+
+        # calculation is done only for the relevant boundary particles.
+        # d_wij (and d_uf) is 0 for particles sufficiently away from the
+        # solid-fluid interface
+        if d_wij[d_idx] > 1e-12:
+            d_uf[d_idx] /= d_wij[d_idx]
+            d_vf[d_idx] /= d_wij[d_idx]
+            d_wf[d_idx] /= d_wij[d_idx]
+
+        # Dummy velocities at the ghost points using Eq. (23),
+        # Assumes static wall and adds interpolated velocity
+        # to the wall boundary particles
+        d_u[d_idx] = - 2 * d_uf[d_idx]
+        d_v[d_idx] = - 2 * d_vf[d_idx]
+        d_w[d_idx] = - 2 * d_wf[d_idx]
