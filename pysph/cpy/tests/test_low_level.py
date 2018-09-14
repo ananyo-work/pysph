@@ -14,16 +14,15 @@ from ..low_level import (
 
 class TestKernel(unittest.TestCase):
 
-    def setUp(self):
+    def test_simple_kernel_opencl(self):
         importorskip('pyopencl')
-
-    def test_simple_kernel(self):
         # Given
-        @annotate(gdoublep='x, y', a='float')
-        def knl(x, y, a):
+        @annotate(gdoublep='x, y', a='float', size='int')
+        def knl(x, y, a, size):
             i = declare('int')
             i = GID_0*LDIM_0 + LID_0
-            y[i] = x[i]*a
+            if i < size:
+                y[i] = x[i]*a
 
         x = np.linspace(0, 1, 1000)
         y = np.zeros_like(x)
@@ -32,13 +31,37 @@ class TestKernel(unittest.TestCase):
         # When
         k = Kernel(knl, backend='opencl')
         a = 21.0
-        k(x, y, a)
+        k(x, y, a, 1000)
+
+        # Then
+        y.pull()
+        self.assertTrue(np.allclose(y.data, x.data*a))
+
+    def test_simple_kernel_cuda(self):
+        importorskip('pycuda')
+        # Given
+        @annotate(gdoublep='x, y', a='float', size='int')
+        def knl(x, y, a, size):
+            i = declare('int')
+            i = GID_0*LDIM_0 + LID_0
+            if i < size:
+                y[i] = x[i]*a
+
+        x = np.linspace(0, 1, 1000)
+        y = np.zeros_like(x)
+        x, y = wrap(x, y, backend='cuda')
+
+        # When
+        k = Kernel(knl, backend='cuda')
+        a = 21.0
+        k(x, y, a, 1000)
 
         # Then
         y.pull()
         self.assertTrue(np.allclose(y.data, x.data*a))
 
     def test_kernel_with_local_memory(self):
+        importorskip('pyopencl')
         # Given
         @annotate(gdoublep='x, y', xc='ldoublep', a='float')
         def knl(x, y, xc, a):
