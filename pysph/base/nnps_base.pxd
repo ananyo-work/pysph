@@ -164,6 +164,10 @@ cdef class CPUDomainManager:
     cdef public bint periodic_in_x, periodic_in_y, periodic_in_z
     cdef public bint is_periodic
 
+    cdef public bint is_reflective
+    cdef public bint reflective_image_created
+    cdef public str reflective_array
+
     cdef public list pa_wrappers     # NNPS particle array wrappers
     cdef public int narrays          # number of arrays
     cdef public double cell_size     # distance to create ghosts
@@ -189,6 +193,12 @@ cdef class CPUDomainManager:
     # Compute the cell size across processors. The cell size is taken
     # as max(h)*radius_scale
     cdef _compute_cell_size_for_binning(self)
+
+    # Create image particles for reflection
+    cdef _create_reflective_image_particles(self)
+
+    # modify position / velocities of image particles for reflection
+    cdef _update_image_particles_1d(self)
 
 
 # Cell to hold particle indices

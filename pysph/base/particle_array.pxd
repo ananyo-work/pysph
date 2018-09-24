@@ -89,6 +89,7 @@ cdef class ParticleArray:
     cpdef int get_number_of_particles(self, bint real=*)
     cpdef remove_particles(self, indices)
     cpdef remove_tagged_particles(self, int tag)
+    cpdef get_tagged_particles(self, int tag, LongArray out)
 
     # function to add any property
     cpdef add_constant(self, str name, data)

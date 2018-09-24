@@ -536,6 +536,30 @@ cdef class ParticleArray:
         # remove the particles.
         self.remove_particles(indices)
 
+    cpdef get_tagged_particles(self, int tag, LongArray out):
+        """ Get indices of particles particles
+        that have the given tag.
+
+        Parameters
+        ----------
+
+        tag : int
+            the type of particles
+
+        """
+        if self.gpu is not None:
+            return self.gpu.get_tagged_particles(tag)
+        cdef IntArray tag_array = self.properties['tag']
+        cdef int *tagarrptr = tag_array.get_data_ptr()
+        cdef int i
+
+        # find the indices of the particles
+        for i in range(tag_array.length):
+            if tagarrptr[i] == tag:
+                out.append(i)
+
+        # return out
+
     def add_particles(self, **particle_props):
         """
         Add particles in particle_array to self.

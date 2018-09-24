@@ -240,7 +240,8 @@ cdef class DomainManager:
     def __init__(self, double xmin=-1000, double xmax=1000, double ymin=0,
                  double ymax=0, double zmin=0, double zmax=0,
                  periodic_in_x=False, periodic_in_y=False, periodic_in_z=False,
-                 double n_layers=2.0):
+                 double n_layers=2.0, is_reflective=False,
+                 reflective_array=None):
         """Constructor
 
         Parameters
@@ -248,12 +249,16 @@ cdef class DomainManager:
 
         xmin, xmax, ymin, ymax, zmin, zmax: double: extents of the domain.
         periodic_in_x, periodic_in_y, periodic_in_z: bool: axis periodicity.
+        reflective: bool: if walls are reflective
+        reflective_array: string: particle array that will reflect
 
         n_layers: double: number of ghost layers as a multiple of
             h_max*radius_scale
         """
         is_periodic = periodic_in_x or periodic_in_y or periodic_in_z
-        if get_config().use_opencl and not is_periodic:
+        if is_reflective and reflective_array is None:
+            raise ValueError("Reflective boudary particles must be specified")
+        if get_config().use_opencl and not is_periodic and not is_reflective:
             from pysph.base.gpu_domain_manager import GPUDomainManager
             domain_manager = GPUDomainManager
         else:
@@ -262,7 +267,8 @@ cdef class DomainManager:
             xmin=xmin, xmax=xmax, ymin=ymin,
             ymax=ymax, zmin=zmin, zmax=zmax, periodic_in_x=periodic_in_x,
             periodic_in_y=periodic_in_y, periodic_in_z=periodic_in_z,
-            n_layers=n_layers
+            n_layers=n_layers, is_reflective=is_reflective,
+            reflective_array=reflective_array
         )
 
     def set_pa_wrappers(self, wrappers):
@@ -308,7 +314,8 @@ cdef class CPUDomainManager:
     def __init__(self, double xmin=-1000, double xmax=1000, double ymin=0,
                  double ymax=0, double zmin=0, double zmax=0,
                  periodic_in_x=False, periodic_in_y=False, periodic_in_z=False,
-                 double n_layers=2.0):
+                 double n_layers=2.0, is_reflective=False,
+                 reflective_array=None):
         """Constructor
 
         The n_layers argument specifies the number of ghost layers as multiples
@@ -327,6 +334,11 @@ cdef class CPUDomainManager:
         self.periodic_in_z = periodic_in_z
         self.is_periodic = periodic_in_x or periodic_in_y or periodic_in_z
         self.n_layers = n_layers
+
+        # If the domain is reflective
+        self.is_reflective = is_reflective
+        self.reflective_array = reflective_array
+        self.reflective_image_created = False
 
         # get the translates in each coordinate direction
         self.xtranslate = xmax - xmin
@@ -393,6 +405,19 @@ cdef class CPUDomainManager:
             # Update GPU.
             self._update_gpu()
 
+        # create reflective particles beforehand to reduce
+        # computational costs
+        if self.is_reflective and not self.in_parallel \
+         and not self.reflective_image_created:
+            self._create_reflective_image_particles()
+            self.reflective_image_created = True
+            self._update_gpu()
+
+        if self.is_reflective and not self.in_parallel:
+            self._update_from_gpu()
+            self._update_image_particles_1d()
+            self._update_gpu()
+
     #### Private protocol ###############################################
     cdef _add_to_array(self, DoubleArray arr, double disp):
         cdef int i
@@ -455,6 +480,154 @@ cdef class CPUDomainManager:
         """Sanity check on the limits"""
         if ( (xmax < xmin) or (ymax < ymin) or (zmax < zmin) ):
             raise ValueError("Invalid domain limits!")
+
+    cdef _create_reflective_image_particles(self):
+        """ Create reflective image particles beforehand
+
+        Copy all the boundary particles, set their pressure
+        and velocity to zero and tag them as ghosts, then
+        add them to boundary particle_array
+        """
+        cdef list pa_wrappers = self.pa_wrappers
+        cdef int narrays = self.narrays
+        cdef int reflective_array_index
+        cdef double position_offset = self.cell_size * self.n_layers
+        cdef NNPSParticleArrayWrapper pa_wrapper
+        cdef ParticleArray pa
+        for array_index in range(narrays):
+            pa_wrapper = pa_wrappers[ array_index ]
+            pa = pa_wrapper.pa
+            if pa.name == self.reflective_array:
+                reflective_array_index = array_index
+                break
+        cdef DoubleArray x, y, z
+        x = pa_wrappers[ reflective_array_index ].x
+        y = pa_wrappers[ reflective_array_index ].y
+        z = pa_wrappers[ reflective_array_index ].z
+
+        copy_list = np.arange(
+            0,
+            pa.num_real_particles
+        )
+        
+        for array_index in range(narrays):
+            if array_index == reflective_array_index:
+                continue
+            
+            copy = pa.extract_particles(
+                copy_list
+            )
+            # set particle properties as zero and place them outside
+            # the computation domain
+            copy.set(
+                p=np.zeros_like(x),
+                u=np.zeros_like(x),
+                v=np.zeros_like(x),
+                w=np.zeros_like(x),
+                x = np.ones_like(x) * (position_offset + self.xmax),
+                y = np.ones_like(x) * (position_offset + self.ymax),
+                z = np.ones_like(x) * (position_offset + self.zmax),
+            )
+            copy.tag[:] = Ghost
+            pa_wrappers[ array_index ].pa.append_parray(
+                copy
+            )
+            pa_wrappers[ array_index ].pa.align_particles()
+
+    cdef _update_image_particles_1d(self):
+        """Place one mirror particle corresponding
+        to a real particle, with flipped velocity in
+        normal direction to the surface.
+        Currently only 1D, in x
+        """
+
+        cdef list pa_wrappers = self.pa_wrappers
+        cdef int narrays = self.narrays
+        cdef int reflective_array_index
+        cdef double xi, yi, zi
+        cdef double cell_size
+        cdef NNPSParticleArrayWrapper pa_wrapper
+        cdef ParticleArray pa
+        cdef LongArray ghost_indices
+        cdef int num_ghost_particles
+        cdef int ghost_particles_used
+        cdef int current_ghost_particle
+
+        for array_index in range(narrays):
+            pa_wrapper = pa_wrappers[ array_index ]
+            # pa = pa_wrapper.pa
+            # if pa.name == self.reflective_array:
+            #     reflective_array_index = array_index
+            #     break
+            if pa_wrapper.pa.name == self.reflective_array:
+                # boundary particles
+                continue
+            
+            ghost_indices = LongArray()
+            pa = pa_wrapper.pa
+            pa.align_particles()
+            pa.get_tagged_particles(
+                Ghost, ghost_indices
+            )
+            num_ghost_particles = ghost_indices.length
+            ghost_particles_used = 0
+            current_ghost_particle = 0
+            
+            if num_ghost_particles <= 0:
+                raise ValueError("Zero ghost particles, can't reflect")
+
+
+        # for array_index in range(narrays):
+        #     if array_index == reflective_array_index:
+        #         # boundary particles
+        #         continue
+            # pa_wrapper = pa_wrappers[ array_index ]
+            # properties_list_array = pa_wrapper.pa.properties.keys()
+            properties_list_ghost = pa.properties.keys()
+            for i in range(len(pa_wrapper.x) - num_ghost_particles):
+                if ghost_particles_used >= num_ghost_particles:
+                    raise ValueError(
+                        "Not enough ghost particles, increase boundary"
+                       )
+                # cell_size = pa_wrapper.pa.get_carray('h')[i] * 2
+                cell_size = self.cell_size * self.n_layers
+                current_ghost_particle = ghost_indices[0]\
+                    + ghost_particles_used
+                xi = pa_wrapper.x.data[i]
+                yi = pa_wrapper.y.data[i]
+                zi = pa_wrapper.z.data[i]
+                if self.xmax - xi < cell_size or xi - self.xmin < cell_size:
+                    # print(i)
+                    # print(current_ghost_particle)
+                    for prop in properties_list_ghost:
+                        # if prop in properties_list_ghost:
+                        pa.get_carray(prop)[current_ghost_particle] =\
+                            pa_wrapper.pa.get_carray(prop)[i]
+                    if self.xmax - xi < cell_size:
+                        pa.get_carray('x')[current_ghost_particle] =\
+                            self.xmax + (self.xmax - xi)
+                    elif xi - self.xmin < cell_size:
+                        pa.get_carray('x')[current_ghost_particle] =\
+                            self.xmin - (xi - self.xmin)
+                    pa.get_carray('u')[current_ghost_particle] =\
+                        -pa_wrapper.pa.get_carray('u')[i]
+                    pa.get_carray('tag')[current_ghost_particle] = Ghost
+                    ghost_particles_used += 1
+            
+            # print("resetting from %s to %s" %(current_ghost_particle + 1, len(pa_wrapper.x)))            
+            for i in range(current_ghost_particle + 1, len(pa_wrapper.x)):
+                # reset unused particles
+                position_offset = self.cell_size * self.n_layers
+                pa.get_carray('u')[i] = 0
+                pa.get_carray('v')[i] = 0
+                pa.get_carray('w')[i] = 0
+                pa.get_carray('p')[i] = 0
+                pa.get_carray('m')[i] = 0
+                pa.get_carray('x')[i] = (position_offset + self.xmax)
+                pa.get_carray('y')[i] = (position_offset + self.ymax)
+                pa.get_carray('z')[i] = (position_offset + self.zmax)
+                    
+
 
     cdef _create_ghosts_periodic(self):
         """Identify boundary particles and create images.
