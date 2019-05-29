@@ -1537,3 +1537,326 @@ class ADKEScheme(Scheme):
             pa = particle_arrays[fluid]
             self._ensure_properties(pa, props, clean)
             pa.set_output_arrays(output_props)
+
+
+class RSPHScheme(Scheme):
+    def __init__(self, fluids, solids, dim, gamma, volume_eqn=0,
+                 pk=0.05, kernel_factor=2.2, use_precalc_derived=False):
+        self.fluids = fluids
+        self.solids = solids
+        self.dim = dim
+        self.solver = None
+        self.gamma = gamma
+        self.volume_eqn = volume_eqn
+        self.pk = pk
+        self.kernel_factor = kernel_factor
+        self.use_precalc_derived = use_precalc_derived
+
+    def get_equations(self):
+        from pysph.sph.equation import Group
+        # TODO: remove DebugEqn
+        from pysph.sph.gas_dynamics.rsph import (
+            VolumeWeightMass, VolumeWeightPressure, SummationDensityRosswog,
+            UpdateSmoothingLength, EOSRosswog, RecoverPrimitiveVariables,
+            MomentumRosswog, EnthalpyRosswog, DebugEqn, RSPHUpdateGhostProps,
+            SpeedOfSoundRosswog, AccelRosswogIA, KernelMatrixRosswogIA
+        )
+
+        if self.volume_eqn == 0:
+            VolumeWeight = VolumeWeightPressure
+        elif self.volume_eqn == 1:
+            VolumeWeight = VolumeWeightMass
+        else:
+            raise NotImplementedError(
+                "choose from 0: VolumeWeightPressure, or 1: VolumeWeightMass"
+            )
+
+        equations = []
+        all_particles = self.solids + self.fluids
+
+        for particles in all_particles:
+            # print(particles)
+            if not self.use_precalc_derived:
+                grp = []
+                grp.append(
+                EnthalpyRosswog(
+                    dest=particles, sources=None
+                    )
+                )
+                equations.append(Group(equations=grp))
+                
+                grp = []
+                grp.append(
+                MomentumRosswog(
+                    dest=particles, sources=None
+                    )
+                )
+                equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     RecoverPrimitiveVariables(
+            #         dest=particles, sources=None, dim=self.dim,
+            #         Gamma=self.gamma
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+
+            grp = []
+            grp.append(
+                EnthalpyRosswog(
+                    dest=particles, sources=None
+                )
+            )
+            equations.append(Group(equations=grp))
+
+            grp = []
+            grp.append(
+                SpeedOfSoundRosswog(
+                    dest=particles, sources=None, Gamma=self.gamma
+                )
+            )
+            equations.append(Group(equations=grp))
+
+            grp = []
+            grp.append(
+                RSPHUpdateGhostProps(
+                    dest=particles, sources=None
+                )
+            )
+            equations.append(Group(equations=grp, real=False))
+            
+            # find the optimal 'h'
+            # do iters
+            for i in range(4): # magic number
+                grp = []
+                grp.append(
+                    VolumeWeight(
+                        dest=particles, sources=None, k=self.pk
+                    )
+                )
+                equations.append(Group(equations=grp))
+                
+                grp = []
+                grp.append(
+                    RSPHUpdateGhostProps(
+                        dest=particles, sources=None
+                    )
+                )
+                equations.append(Group(equations=grp, real=False))
+                
+                grp = []
+                grp.append(
+                    SummationDensityRosswog(
+                        dest=particles, sources=all_particles
+                    )
+                )
+                equations.append(Group(equations=grp))
+                
+                grp = []
+                grp.append(
+                    RSPHUpdateGhostProps(
+                        dest=particles, sources=None
+                    )
+                )
+                equations.append(Group(equations=grp, real=False))
+
+                grp = []
+                grp.append(
+                    EOSRosswog(
+                        dest=particles, sources=None, Gamma=self.gamma
+                    )
+                )
+                equations.append(Group(equations=grp))
+
+                grp = []
+                grp.append(
+                    RSPHUpdateGhostProps(
+                        dest=particles, sources=None
+                    )
+                )
+                equations.append(Group(equations=grp, real=False))
+
+                grp = []
+                grp.append(
+                    UpdateSmoothingLength(
+                        dest=particles, sources=None, eta=self.kernel_factor,
+                        dim=self.dim
+                    )
+                )
+                equations.append(Group(equations=grp, update_nnps=True))
+
+            # # do second iter
+            # grp = []
+            # grp.append(
+            #     VolumeWeight(
+            #         dest=particles, sources=None, k=self.pk
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     SummationDensityRosswog(
+            #         dest=particles, sources=all_particles
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     EOSRosswog(
+            #         dest=particles, sources=None, Gamma=self.gamma
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     UpdateSmoothingLength(
+            #         dest=particles, sources=None, eta=self.kernel_factor,
+            #         dim=self.dim
+            #     )
+            # )   
+            # # grp = []
+            # # grp.append(
+            # #     DebugEqn(
+            # #         dest=particles
+            # #     )
+            # # )
+         
+            # # equations.append(Group(equations=grp, update_nnps=True))
+
+            # # do final iter
+            # grp = []
+            # grp.append(
+            #     VolumeWeight(
+            #         dest=particles, sources=None, k=self.pk
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     SummationDensityRosswog(
+            #         dest=particles, sources=all_particles
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            # grp = []
+            # grp.append(
+            #     EOSRosswog(
+            #         dest=particles, sources=None, Gamma=self.gamma
+            #     )
+            # )
+            # equations.append(Group(equations=grp))
+            
+            # # done finding updated smoothing length
+
+            grp = []
+            grp.append(
+                KernelMatrixRosswogIA(
+                    dest=particles, sources=all_particles, dim=self.dim
+                )
+            )
+            equations.append(Group(equations=grp, update_nnps=False))
+
+            grp = []
+            grp.append(
+                RSPHUpdateGhostProps(
+                    dest=particles, sources=None
+                )
+            )
+            equations.append(Group(equations=grp, real=False))
+
+            grp = []
+            grp.append(
+                DebugEqn(
+                    dest=particles
+                )
+            )
+            equations.append(Group(equations=grp))
+
+            grp = []
+            grp.append(
+                AccelRosswogIA(
+                    dest=particles, sources=all_particles, dim=self.dim
+                )
+            )
+            equations.append(Group(equations=grp))
+
+        return equations
+
+    def configure_solver(self, kernel=None, integrator_cls=None,
+                         extra_steppers=None, **kw):
+        if self.dim == 1:
+            from pysph.base.kernels import WendlandQuinticC6_1D
+            _kernel = WendlandQuinticC6_1D(dim=self.dim)
+        else:
+            from pysph.base.kernels import WendlandQuinticC6
+            _kernel = WendlandQuinticC6(dim=self.dim)
+        
+        if kernel is None:
+            kernel = _kernel
+
+        steppers = {}
+        if extra_steppers is not None:
+            steppers.update(extra_steppers)
+
+        from pysph.sph.integrator import EulerIntegrator, TVDRK3Integrator
+        from pysph.sph.integrator_step import ADKEStep
+        from pysph.sph.gas_dynamics.rsph import RSPHTVDRK3Step, RSPHEulerStep
+
+        cls = integrator_cls if integrator_cls is not None else EulerIntegrator
+        step_cls = RSPHEulerStep
+        for name in self.fluids:
+            if name not in steppers:
+                steppers[name] = step_cls()
+
+        integrator = cls(**steppers)
+
+        from pysph.solver.solver import Solver
+        self.solver = Solver(
+            dim=self.dim, integrator=integrator, kernel=kernel, **kw
+        )
+
+    def setup_properties(self, particles, clean=True):
+        from pysph.base.utils import get_particle_array
+        import numpy
+
+        particle_arrays = dict([(p.name, p) for p in particles])
+        required_props = [
+                'x', 'y', 'z', 'u', 'v', 'w', 'rho', 'h', 'm', 'cs', 'p',
+                'e', 'au', 'av', 'aw', 'arho', 'ae', 'am', 'ah', 'x0', 'y0',
+                'z0', 'u0', 'v0', 'w0', 'rho0', 'e0', 'h0', 'div',  'h0',
+                'wij', 'htmp', 'logrho', 'Sx', 'Sy', 'Sz', 'er',
+                'X', 'kX', 'V', 'eth', 'er0', 'x0', 'y0', 'z0',
+                'Sx0', 'Sy0', 'Sz0', 'aSx', 'aSy', 'aSz', 'aer', ]
+
+        dummy = get_particle_array(additional_props=required_props,
+                                   name='junk')
+        dummy.set_output_arrays(
+            ['x', 'y', 'u', 'v', 'rho', 'm', 'h',
+             'cs', 'p', 'e', 'au', 'av', 'ae', 'pid', 'gid', 'tag']
+        )
+
+        props = list(dummy.properties.keys())
+        output_props = dummy.output_property_arrays
+        for solid in self.solids:
+            pa = particle_arrays[solid]
+            self._ensure_properties(pa, props, clean)
+            pa.set_output_arrays(output_props)
+
+        for fluid in self.fluids:
+            pa = particle_arrays[fluid]
+            self._ensure_properties(pa, props, clean)
+            pa.add_property('converged', type='int')
+            pa.add_property('c_mat', stride=9)
+            pa.add_property('aS', stride=3)
+            pa.add_property('gamma', type='float')
+            pa.gamma[:] = 1.0
+            pa.add_property('Gamma', type='float')
+            pa.Gamma[:] = self.gamma
+            pa.add_property('N', type='float')
+            pa.N[:] = pa.rho[:]
+            pa.add_property('mr', type='float')
+            pa.mr[:] = pa.m[:]
+            pa.add_property('orig_idx', type='int')
+            nfp = pa.get_number_of_particles()
+            pa.orig_idx[:] = numpy.arange(nfp)
+            pa.set_output_arrays(output_props)

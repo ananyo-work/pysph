@@ -1,5 +1,5 @@
 import numpy
-from pysph.base.kernels import Gaussian
+from pysph.base.kernels import Gaussian, CubicSpline
 from pysph.base.utils import get_particle_array as gpa
 from pysph.solver.application import Application
 from pysph.sph.equation import Group
@@ -13,7 +13,7 @@ from pysph.sph.gas_dynamics.rsph import \
 
 class DiscontTest(Application):
     def configure_method(self, method=0):
-        self.method = method
+        self.density_weight_method = method
 
     def create_particles(self):
         rhol = 1
@@ -29,9 +29,15 @@ class DiscontTest(Application):
         self.nparticlesy = 50
         dy = dx / numpy.sqrt(12)  # regular rhexagonal lattice
 
-        s = dx / numpy.sqrt(3)  # side of an hexagon
-        v = 0.166 * 3 * numpy.sqrt(3) * s**2  # volume of hexagon
+        r_s = 0.5 * dx / numpy.sqrt(3)  # radius of the circle
+        v = 2 * numpy.sqrt(3) * r_s**2  # volume of each particle
         h = kernel_factor * numpy.sqrt(v)
+
+        domain_area = (xmax - xmin) * (self.nparticlesy - 1) * dy
+        print("domain area %s" % (domain_area))
+        print("average particle volume %s" 
+               % (domain_area/(self.nparticlesy * self.nparticlesx)))
+        print("calculatd particle volume %s" % (v))
 
         x = numpy.zeros((0))
         y = numpy.zeros((0))
@@ -54,11 +60,11 @@ class DiscontTest(Application):
         m = rho * v
         
         fluid = gpa(
-            name='fluid', x=x, y=y, V=v, p=p, u=0, v=0, nu=m, N=rho, e=e,
-            gamma=1, h=h, additional_props=['X', 'kX', 'arho']
+            name='fluid', x=x, y=y, V=v, p=p, u=0, v=0, mr=m, N=rho, e=e,
+            gamma=1, h=h, m=m, additional_props=['X', 'kX', 'arho']
         )
 
-        fluid.add_output_arrays(['nu', 'e', 'p', 'N'])
+        fluid.add_output_arrays(['mr', 'e', 'p', 'N'])
         return [fluid]
 
     def create_solver(self):
@@ -77,11 +83,11 @@ class DiscontTest(Application):
         equations = []
         
         g1 = []
-        if self.method == 0:
+        if self.density_weight_method == 0:
             g1.append(
                 VolumeWeightPressure(dest='fluid', sources=['fluid'])
             )
-        elif self.method == 1:
+        elif self.density_weight_method == 1:
             g1.append(
                 VolumeWeightMass(dest='fluid', sources=['fluid'])
             )
@@ -103,7 +109,8 @@ class DiscontTest(Application):
 
     def post_process(self):
         from pysph.solver.utils import load
-        if len(self.output_files) < 1:
+        import os
+        if len(self.output_files) < 1 or self.rank > 0:
             return
         outfile = self.output_files[-1]
         data = load(outfile)
@@ -113,8 +120,17 @@ class DiscontTest(Application):
         rho = pa.N
         e = pa.e
         p = pa.p
+        
+        try:
+            import matplotlib
+            from matplotlib import pyplot
+            matplotlib.use('Agg')
+        except ImportError:
+            print("post-processing requires matplotlib")
+            exit(1)
 
-        from matplotlib import pyplot
+        density_weight_method_names = ['rosswog_pk', 'summation_density']
+
         offset = int(self.nparticlesy / 2) * self.nparticlesx
         pyplot.scatter(
             x[offset:offset + self.nparticlesx],
@@ -129,16 +145,34 @@ class DiscontTest(Application):
         pyplot.scatter(
             x[offset:offset + self.nparticlesx],
             rho[offset:offset + self.nparticlesx],
-            s=4
+            facecolors='none', edgecolors='g', s=20
         )
+        pyplot.grid()
         pyplot.legend(['ie', 'pressure', 'density'])
         pyplot.xlim((-0.1, 0.1))
+        pyplot.title(
+            density_weight_method_names[self.density_weight_method]
+        )
+
+        fname = os.path.join(
+            self.output_dir,
+            density_weight_method_names[self.density_weight_method] + ".png"
+        )
         # pyplot.gca().set_aspect('equal', adjustable='box')
-        pyplot.show()
+        # pyplot.show()
+        pyplot.savefig(fname, dpi=300)
+        pyplot.close('all')
 
 
 if __name__ == "__main__":
+    # methodd: 
+    #   0: rosswog style X=p^k
+    #   1: sph summation density X=m
     app = DiscontTest()
     app.configure_method(0)
+    app.run()
+    app.post_process()
+    app = DiscontTest()
+    app.configure_method(1)
     app.run()
     app.post_process()

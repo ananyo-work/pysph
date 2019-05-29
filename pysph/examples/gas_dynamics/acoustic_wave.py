@@ -21,7 +21,7 @@ from pysph.base.utils import get_particle_array as gpa
 from pysph.base.nnps import DomainManager
 from pysph.solver.application import Application
 from pysph.sph.scheme import \
-    GSPHScheme, ADKEScheme, GasDScheme, SchemeChooser
+    GSPHScheme, ADKEScheme, GasDScheme, RSPHScheme, SchemeChooser
 
 
 class AcousticWave(Application):
@@ -59,6 +59,7 @@ class AcousticWave(Application):
 
         u = self.c_0 * self.delta_rho * numpy.sin(self.k * x) /\
             self.rho_0
+
         cs = numpy.sqrt(
             self.gamma * p / rho
         )
@@ -87,8 +88,13 @@ class AcousticWave(Application):
             beta=2.0, update_alpha1=False, update_alpha2=False
         )
 
+        rsph = RSPHScheme(
+            fluids=['fluid'], solids=[], dim=self.dim, gamma=self.gamma,
+            volume_eqn=0
+        )
+
         s = SchemeChooser(
-            default='gsph', gsph=gsph, mpm=mpm
+            default='gsph', gsph=gsph, mpm=mpm, rsph=rsph
         )
 
         return s
@@ -103,6 +109,11 @@ class AcousticWave(Application):
 
         if self.options.scheme == 'mpm':
             s.configure(kernel_factor=1.2)
+            s.configure_solver(dt=self.dt, tf=self.tf,
+                               adaptive_timestep=True, pfreq=50)
+
+        if self.options.scheme == 'rsph':
+            s.configure(kernel_factor=1.5)
             s.configure_solver(dt=self.dt, tf=self.tf,
                                adaptive_timestep=True, pfreq=50)
 
