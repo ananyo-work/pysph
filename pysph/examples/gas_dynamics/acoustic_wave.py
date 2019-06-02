@@ -35,7 +35,7 @@ class AcousticWave(Application):
         self.p_0 = 1.
         self.c_0 = 1.
         self.delta_rho = 1e-6
-        self.n_particles = 400
+        self.n_particles = 100
         self.domain_length = self.xmax - self.xmin
         self.dx = self.domain_length / (self.n_particles)
         self.k = -2 * numpy.pi / self.domain_length
@@ -117,7 +117,7 @@ class AcousticWave(Application):
         if self.options.scheme == 'rsph':
             s.configure(kernel_factor=1.5)
             s.configure_solver(dt=self.dt, tf=self.tf,
-                               adaptive_timestep=True, pfreq=50)
+                               adaptive_timestep=False, pfreq=50)
 
     def post_process(self):
         from pysph.solver.utils import load

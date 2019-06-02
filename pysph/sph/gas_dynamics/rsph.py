@@ -68,7 +68,7 @@ class VolumeWeightPressure(Equation):
 
 
 class VolumeWeightMass(Equation):
-    def __init__(self, dest, sources=None):
+    def __init__(self, dest, sources=None, k=0.0):
         super(VolumeWeightMass, self).__init__(dest, sources)
 
     def initialize(self, d_X, d_mr, d_idx):
@@ -163,7 +163,7 @@ class AccelRosswogIA(Equation):
 
     def loop(self, d_idx, s_idx, d_aS, XIJ, d_c_mat, s_c_mat,
              d_p, s_p, d_V, s_V, d_X, s_X, d_aer, d_u, d_v,
-             d_w, s_u, s_v, s_w, s_orig_idx, WI, WJ):
+             d_w, s_u, s_v, s_w, s_orig_idx, WI, WJ, DWI, DWJ):
         # TODO: use d = 3 to fix out of order problems (x-z, no y)
         d, i = declare('int', 2)
         d_start_idx, s_start_idx = declare('int', 2)
@@ -195,8 +195,13 @@ class AccelRosswogIA(Equation):
             Gb[i] = - WJ * (s_c_mat[s_start_idx + i * d + 0] * XIJ[0] +\
                             s_c_mat[s_start_idx + i * d + 1] * XIJ[1] +\
                             s_c_mat[s_start_idx + i * d + 2] * XIJ[2])
-        
-            tmp = 0.0
+
+            # print("for particle ", d_idx, " neighbour ", s_idx, " Ga ", Ga[i])
+            # print("for particle ", d_idx, " neighbour ", s_idx, " Gb ", Gb[i])
+            # print("for particle ", d_idx, " neighbour ", s_idx, " DWI ", DWI[i])
+            # print("for particle ", d_idx, " neighbour ", s_idx, " DWJ ", DWJ[i])
+
+            # tmp = 0.0
             d_aS[3 * d_idx + i] += d_p[d_idx] * d_V[d_idx] * d_V[d_idx] *\
                                    s_X[s_idx] * Ga[i] / d_X[d_idx] +\
                                    s_p[s_idx] * s_V[s_idx] * s_V[s_idx] *\
@@ -215,16 +220,23 @@ class AccelRosswogIA(Equation):
                             s_p[s_idx] * s_V[s_idx] * s_V[s_idx] *\
                             d_X[d_idx] * Gb[i] * VI[i] / s_X[s_idx]
     
-    def post_loop(self, d_idx, d_aSx, d_aSy, d_aSz, d_aer, d_mr, d_aS):
-        # d = int(self.dim)
-        # TODO: use d = 3 to fix out of order problems (x-z, no y)
+    def post_loop(self, d_idx, d_aSx, d_aSy, d_aSz, d_aer, d_mr, d_aS,
+                  d_h, d_dt_cfl):
         d_aer[d_idx] = - d_aer[d_idx] / d_mr[d_idx]
         d_aSx[d_idx] = - d_aS[3 * d_idx + 0] / d_mr[d_idx]
-        # print("aSx for id: ", d_idx, " is ", d_aS[3 * d_idx])
-        # if d > 1:
         d_aSy[d_idx] = - d_aS[3 * d_idx + 1] / d_mr[d_idx]
-        # if d > 2:
         d_aSz[d_idx] = - d_aS[3 * d_idx + 2] / d_mr[d_idx]
+        # print("aSx for id: ", d_idx, " is ", d_aS[3 * d_idx])
+
+        mag = declare('float')
+        mag = (
+            d_aS[3 * d_idx + 0] * d_aS[3 * d_idx + 0] +
+            d_aS[3 * d_idx + 1] * d_aS[3 * d_idx + 1] +
+            d_aS[3 * d_idx + 2] * d_aS[3 * d_idx + 2]
+        )**0.5
+
+        d_dt_cfl[d_idx] = (mag * d_h[d_idx])**0.5
+
 
 
 class EOSRosswog(Equation):
@@ -280,17 +292,6 @@ class MomentumRosswog(Equation):
                           d_gamma[d_idx] / d_N[d_idx])
             # printf("d_Sx for particle %d is %f\n", d_idx, d_Sx[d_idx]);
             
-
-
-# class EnergyRosswog(Equation):
-#     def __init__(self, dest, sources=None):
-#         super(EnergyRosswog, self).__init__(dest, sources)
-
-#     def initialize(self, d_idx, d_er, d_gamma, d_p, d_N, d_eth, t, dt):
-#         if t < dt / 2:
-#             pass
-            
-        
 
 class RecoverPrimitiveVariables(Equation):
     def __init__(self, dest, sources=None, dim=2, tol=1e-6, Gamma=5/3):
@@ -371,12 +372,16 @@ class RSPHTVDRK3Step(IntegratorStep):
                d_N, d_gamma, d_p, d_e, d_Gamma,
                dt):
         # update momentum per baryon
-        d_Sx[d_idx] = 0.75 * d_Sx0[d_idx] + 0.25 * d_aSx[d_idx] * dt
-        d_Sy[d_idx] = 0.75 * d_Sy0[d_idx] + 0.25 * d_aSy[d_idx] * dt
-        d_Sz[d_idx] = 0.75 * d_Sz0[d_idx] + 0.25 * d_aSz[d_idx] * dt
+        d_Sx[d_idx] = 0.75 * d_Sx0[d_idx] + 0.25 * d_aSx[d_idx] * dt +\
+                      0.25 * d_Sx[d_idx]
+        d_Sy[d_idx] = 0.75 * d_Sy0[d_idx] + 0.25 * d_aSy[d_idx] * dt +\
+                      0.25 * d_Sy[d_idx]
+        d_Sz[d_idx] = 0.75 * d_Sz0[d_idx] + 0.25 * d_aSz[d_idx] * dt +\
+                      0.25 * d_Sz[d_idx]
 
         # update energy per baryon
-        d_er[d_idx] = 0.75 * d_er0[d_idx] + 0.25 * d_aer[d_idx] * dt
+        d_er[d_idx] = 0.75 * d_er0[d_idx] + 0.25 * d_aer[d_idx] * dt +\
+                      0.25 * d_er[d_idx]
 
         # recover primitive variables
         d_e[d_idx] = d_er[d_idx] - 1
@@ -386,9 +391,12 @@ class RSPHTVDRK3Step(IntegratorStep):
         d_v[d_idx] = d_Sy[d_idx] / (d_er[d_idx] + d_p[d_idx] / d_N[d_idx])
         d_w[d_idx] = d_Sz[d_idx] / (d_er[d_idx] + d_p[d_idx] / d_N[d_idx])
 
-        d_x[d_idx] = 0.75 * d_x0[d_idx] + 0.25 * d_u[d_idx] * dt
-        d_y[d_idx] = 0.75 * d_y0[d_idx] + 0.25 * d_v[d_idx] * dt
-        d_z[d_idx] = 0.75 * d_z0[d_idx] + 0.25 * d_w[d_idx] * dt
+        d_x[d_idx] = 0.75 * d_x0[d_idx] + 0.25 * d_u[d_idx] * dt +\
+                     0.25 * d_x[d_idx]
+        d_y[d_idx] = 0.75 * d_y0[d_idx] + 0.25 * d_v[d_idx] * dt +\
+                     0.25 * d_y[d_idx]
+        d_z[d_idx] = 0.75 * d_z0[d_idx] + 0.25 * d_w[d_idx] * dt +\
+                     0.25 * d_z[d_idx]
 
     def stage3(self, d_idx, d_x0, d_y0, d_z0, d_x, d_y, d_z,
                d_Sx0, d_Sy0, d_Sz0, d_u, d_v, d_w, d_er0, d_er,
@@ -398,12 +406,16 @@ class RSPHTVDRK3Step(IntegratorStep):
         oneby3 = 1./3.
         twoby3 = 2./3.
         # update momentum per baryon
-        d_Sx[d_idx] = oneby3 * d_Sx0[d_idx] + twoby3 * d_aSx[d_idx] * dt
-        d_Sy[d_idx] = oneby3 * d_Sy0[d_idx] + twoby3 * d_aSy[d_idx] * dt
-        d_Sz[d_idx] = oneby3 * d_Sz0[d_idx] + twoby3 * d_aSz[d_idx] * dt
+        d_Sx[d_idx] = oneby3 * d_Sx0[d_idx] + twoby3 * d_aSx[d_idx] * dt +\
+                      twoby3 * d_Sx[d_idx]
+        d_Sy[d_idx] = oneby3 * d_Sy0[d_idx] + twoby3 * d_aSy[d_idx] * dt +\
+                      twoby3 * d_Sy[d_idx]
+        d_Sz[d_idx] = oneby3 * d_Sz0[d_idx] + twoby3 * d_aSz[d_idx] * dt +\
+                      twoby3 * d_Sz[d_idx]
 
         # update energy per baryon
-        d_er[d_idx] = oneby3 * d_er0[d_idx] + twoby3 * d_aer[d_idx] * dt
+        d_er[d_idx] = oneby3 * d_er0[d_idx] + twoby3 * d_aer[d_idx] * dt +\
+                      twoby3 * d_er[d_idx]
 
         # recover primitive variables
         d_e[d_idx] = d_er[d_idx] - 1
@@ -413,10 +425,12 @@ class RSPHTVDRK3Step(IntegratorStep):
         d_v[d_idx] = d_Sy[d_idx] / (d_er[d_idx] + d_p[d_idx] / d_N[d_idx])
         d_w[d_idx] = d_Sz[d_idx] / (d_er[d_idx] + d_p[d_idx] / d_N[d_idx])
 
-        d_x[d_idx] = oneby3 * d_x0[d_idx] + twoby3 * d_u[d_idx] * dt
-        printf("d_x for particle %d is %f\n", d_idx, d_x0[d_idx]);
-        d_y[d_idx] = oneby3 * d_y0[d_idx] + twoby3 * d_v[d_idx] * dt
-        d_z[d_idx] = oneby3 * d_z0[d_idx] + twoby3 * d_w[d_idx] * dt
+        d_x[d_idx] = oneby3 * d_x0[d_idx] + twoby3 * d_u[d_idx] * dt +\
+                     twoby3 * d_x[d_idx]
+        d_y[d_idx] = oneby3 * d_y0[d_idx] + twoby3 * d_v[d_idx] * dt +\
+                     twoby3 * d_y[d_idx]
+        d_z[d_idx] = oneby3 * d_z0[d_idx] + twoby3 * d_w[d_idx] * dt +\
+                     twoby3 * d_z[d_idx]
 
 
 class RSPHEulerStep(IntegratorStep):
@@ -427,6 +441,7 @@ class RSPHEulerStep(IntegratorStep):
         d_Sy[d_idx] += d_aSy[d_idx] * dt
         d_Sz[d_idx] += d_aSz[d_idx] * dt
 
+        # print("dt, ", dt)
         # update energy per baryon
         d_er[d_idx] += d_aer[d_idx] * dt
 

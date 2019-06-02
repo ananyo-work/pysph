@@ -1541,7 +1541,8 @@ class ADKEScheme(Scheme):
 
 class RSPHScheme(Scheme):
     def __init__(self, fluids, solids, dim, gamma, volume_eqn=0,
-                 pk=0.05, kernel_factor=2.2, use_precalc_derived=False):
+                 pk=0.05, kernel_factor=2.2, use_precalc_derived=False,
+                 cfl=0.3):
         self.fluids = fluids
         self.solids = solids
         self.dim = dim
@@ -1551,6 +1552,7 @@ class RSPHScheme(Scheme):
         self.pk = pk
         self.kernel_factor = kernel_factor
         self.use_precalc_derived = use_precalc_derived
+        self.cfl = cfl
 
     def get_equations(self):
         from pysph.sph.equation import Group
@@ -1592,14 +1594,6 @@ class RSPHScheme(Scheme):
                     )
                 )
                 equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     RecoverPrimitiveVariables(
-            #         dest=particles, sources=None, dim=self.dim,
-            #         Gamma=self.gamma
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
 
             grp = []
             grp.append(
@@ -1685,69 +1679,6 @@ class RSPHScheme(Scheme):
                 )
                 equations.append(Group(equations=grp, update_nnps=True))
 
-            # # do second iter
-            # grp = []
-            # grp.append(
-            #     VolumeWeight(
-            #         dest=particles, sources=None, k=self.pk
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     SummationDensityRosswog(
-            #         dest=particles, sources=all_particles
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     EOSRosswog(
-            #         dest=particles, sources=None, Gamma=self.gamma
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     UpdateSmoothingLength(
-            #         dest=particles, sources=None, eta=self.kernel_factor,
-            #         dim=self.dim
-            #     )
-            # )   
-            # # grp = []
-            # # grp.append(
-            # #     DebugEqn(
-            # #         dest=particles
-            # #     )
-            # # )
-         
-            # # equations.append(Group(equations=grp, update_nnps=True))
-
-            # # do final iter
-            # grp = []
-            # grp.append(
-            #     VolumeWeight(
-            #         dest=particles, sources=None, k=self.pk
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     SummationDensityRosswog(
-            #         dest=particles, sources=all_particles
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            # grp = []
-            # grp.append(
-            #     EOSRosswog(
-            #         dest=particles, sources=None, Gamma=self.gamma
-            #     )
-            # )
-            # equations.append(Group(equations=grp))
-            
-            # # done finding updated smoothing length
-
             grp = []
             grp.append(
                 KernelMatrixRosswogIA(
@@ -1802,8 +1733,8 @@ class RSPHScheme(Scheme):
         from pysph.sph.integrator_step import ADKEStep
         from pysph.sph.gas_dynamics.rsph import RSPHTVDRK3Step, RSPHEulerStep
 
-        cls = integrator_cls if integrator_cls is not None else EulerIntegrator
-        step_cls = RSPHEulerStep
+        cls = integrator_cls if integrator_cls is not None else TVDRK3Integrator
+        step_cls = RSPHTVDRK3Step
         for name in self.fluids:
             if name not in steppers:
                 steppers[name] = step_cls()
@@ -1812,7 +1743,8 @@ class RSPHScheme(Scheme):
 
         from pysph.solver.solver import Solver
         self.solver = Solver(
-            dim=self.dim, integrator=integrator, kernel=kernel, **kw
+            dim=self.dim, integrator=integrator, kernel=kernel,
+            cfl=self.cfl, **kw
         )
 
     def setup_properties(self, particles, clean=True):
@@ -1826,7 +1758,7 @@ class RSPHScheme(Scheme):
                 'z0', 'u0', 'v0', 'w0', 'rho0', 'e0', 'h0', 'div',  'h0',
                 'wij', 'htmp', 'logrho', 'Sx', 'Sy', 'Sz', 'er',
                 'X', 'kX', 'V', 'eth', 'er0', 'x0', 'y0', 'z0',
-                'Sx0', 'Sy0', 'Sz0', 'aSx', 'aSy', 'aSz', 'aer', ]
+                'Sx0', 'Sy0', 'Sz0', 'aSx', 'aSy', 'aSz', 'aer', 'dt_cfl']
 
         dummy = get_particle_array(additional_props=required_props,
                                    name='junk')
